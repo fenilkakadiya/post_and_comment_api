@@ -11,7 +11,8 @@
 - `logout`  
 - `forget password`  
 - `reset password`  
-- `change password`  
+- `change password`
+- `profile photo`
 
 ## Admin
 

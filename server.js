@@ -2,9 +2,28 @@ const express = require("express");
 const connection = require("./connection");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
+const path = require("path");
 const admin_route = require("./admin");
 const nodemailer = require("nodemailer");
 const userRoutes = require("./routes/userRoutes");
+
+const multer = require("multer");
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, "uploads");
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+const upload = multer({ storage: storage });
+
+const fs = require("fs");
+const dir = "./uploads";
+if (!fs.existsSync(dir)) {
+  fs.mkdirSync(dir);
+}
+
 const {
   authenticateToken,
   authforcomment,
@@ -13,21 +32,21 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
+app.use(express.static(__dirname + "public"));
 const SecretKey = "!@#$%^";
 const forgetkey = "youforgot";
 const con = connection();
+const PORT = 6000;
 
 app.use("/admin", admin_route);
 app.use("/users", userRoutes);
-
-const generateAccessToken = (user_id) => {
-  return jwt.sign({ user_id }, SecretKey, { expiresIn: "6h" });
-};
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 const generatetoken = (email) => {
   const token = jwt.sign({ email }, forgetkey, { expiresIn: "1h" });
   return token;
 };
+
 const sendpasswordmailer = async (email) => {
   try {
     const token = generatetoken(email);
@@ -45,7 +64,7 @@ const sendpasswordmailer = async (email) => {
       from: "fenilkakadiya7777@gmail.com",
       to: email,
       subject: "reset passowred",
-      text: "down down donw donw",
+      text: " ",
       html: `<b>click here to <a href= "http://localhost:6000/resetpassword?token=${token}" >reset your password </a> </b>`,
     };
 
@@ -57,21 +76,76 @@ const sendpasswordmailer = async (email) => {
   }
 };
 
-app.post("/posts", authenticateToken, (req, res) => {
+app.post("/posts", authenticateToken, upload.single("photo"), (req, res) => {
   const { title, content } = req.body;
   const user_id = req.user_id;
+  const photo = req.file ? req.file.path : null;
+
   if (!title || !content) {
-    return res.json({ message: "title  and content are compulsory" });
+    return res
+      .status(400)
+      .json({ message: "Title and content are compulsory" });
   }
-  console.log(user_id);
 
   con.query(
-    "INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)",
-    [user_id, title, content],
+    "INSERT INTO posts (user_id, title, content, photo) VALUES (?, ?, ?, ?)",
+    [user_id, title, content, photo],
     (err, result) => {
+      if (err) {
+        return res
+          .status(500)
+          .json({ message: "Error creating post", error: err });
+      }
       res.status(200).json({ message: "Post created", results: result });
     }
   );
+});
+
+app.post(
+  "/uploadprofile",
+  authenticateToken,
+  upload.single("ProfilePhoto"),
+  (req, res) => {
+    const ProfilePhoto = req.file ? req.file.path : null;
+    const user_id = req.user_id;
+
+    if (!user_id || !ProfilePhoto) {
+      return res
+        .status(400)
+        .json({ error: "User ID and profile photo are required" });
+    }
+
+    con.query(
+      "UPDATE users SET photo_path = ? WHERE user_id = ?",
+      [ProfilePhoto, user_id],
+      (error, results) => {
+        if (error) {
+          return res.status(500).json({ error: error.message });
+        }
+        res.json({ message: "Profile photo updated", ProfilePhoto });
+      }
+    );
+  }
+);
+
+app.get("/profile", authenticateToken, (req, res) => {
+  const user_id = req.user_id;
+  const query = "SELECT username, photo_path FROM users WHERE user_id = ?";
+
+  con.query(query, [user_id], (error, results) => {
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (results.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const { username, photo_path } = results[0];
+    const photoUrl = `http://localhost:6000/${photo_path}`;
+
+    res.json({ username, photoUrl, photo_path });
+  });
 });
 
 app.post("/comments", authforcomment, (req, res) => {
@@ -93,7 +167,7 @@ app.post("/comments", authforcomment, (req, res) => {
 app.get("/posts", authenticateToken, (req, res) => {
   const user_id = req.user_id;
   const query =
-    "SELECT p.user_id,p.post_id, p.title, p.content,c.user_id as comment_user_id, c.comment_content FROM posts p LEFT JOIN comments c ON p.post_id = c.post_id WHERE p.user_id = ?;";
+    "SELECT p.user_id,p.post_id, p.title, p.content,c.user_id as user_id,c.comment_id, c.comment_content FROM posts p LEFT JOIN comments c ON p.post_id = c.post_id WHERE p.user_id = ?;";
   con.query(query, [user_id], (err, results) => {
     res.status(200).json({ posts: results });
   });
@@ -101,10 +175,25 @@ app.get("/posts", authenticateToken, (req, res) => {
 
 app.get("/allposts", (req, res) => {
   const query = `
-  SELECT p.post_id as post_id, p.title, p.content, c.user_id as user_id, c.comment_content as comment
-  FROM posts p
-  LEFT JOIN comments c ON p.post_id = c.post_id
-`;
+    SELECT 
+        p.post_id AS post_id,
+        p.user_id AS post_user_id,
+        p.title,
+        p.content,
+        u.username AS post_username,
+        c.comment_id,
+        c.comment_content AS comment,
+        c.user_id AS comment_user_id,
+        cu.username AS comment_username
+    FROM 
+        posts p
+    LEFT JOIN 
+        comments c ON p.post_id = c.post_id
+    LEFT JOIN 
+        users u ON p.user_id = u.user_id
+    LEFT JOIN 
+        users cu ON c.user_id = cu.user_id;
+  `;
 
   con.query(query, (err, results) => {
     if (err) {
@@ -122,13 +211,17 @@ app.get("/allposts", (req, res) => {
           id: postId,
           title: row.title,
           content: row.content,
+          user_id: row.post_user_id,
+          username: row.post_username,
           comments: [],
         });
       }
 
-      if (row.user_id) {
+      if (row.comment_id) {
         postsMap.get(postId).comments.push({
-          user_id: row.user_id,
+          comment_id: row.comment_id,
+          user_id: row.comment_user_id,
+          username: row.comment_username,
           comment: row.comment,
         });
       }
@@ -234,4 +327,6 @@ app.post("/resetpassword", (req, res) => {
   });
 });
 
-app.listen(6000);
+app.listen(PORT, () => {
+  console.log(`server is running on http://localhost:${PORT}`);
+});

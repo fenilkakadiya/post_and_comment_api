@@ -185,7 +185,10 @@ const logout = (req, res) => {
   res.clearCookie("accessToken");
   res.json({ message: "Logged out successfully" });
 };
-
+const generatetoken = (email) => {
+  const token = jwt.sign({ email }, forgetkey, { expiresIn: "1h" });
+  return token;
+};
 const sendpasswordmailer = async (email) => {
   try {
     const token = generatetoken(email);
@@ -204,13 +207,12 @@ const sendpasswordmailer = async (email) => {
       to: email,
       subject: "reset passowred",
       text: "down down donw donw",
-      html: `<b>click here to <a href= "http://localhost:6000/resetpassword?token=${token}" >reset your password </a> </b>`,
+      html: `<b>click here to <a href= "http://localhost:6000/users/resetpassword?token=${token}" >reset your password </a> </b>`,
     };
 
     let info = await transporter.sendMail(mailoption);
     console.log("Message sent: %s", info.messageId);
   } catch (e) {
-    // Handle error
     console.log(e);
   }
 };
